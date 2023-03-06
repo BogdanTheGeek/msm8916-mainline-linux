@@ -15,6 +15,7 @@
 #define BD65B60_MAX_BRIGHTNESS 255
 #define BD65B60_DEFAULT_BRIGHTNESS 255
 #define BD65B60_DEFAULT_TRIGGER "bkl-trigger"
+#define BD65B60_DEFAULT_NAME "white"
 #define BD65B60_DEFAULT_OVP_VAL BD65B60_35V_OVP
 
 #define INT_DEBOUNCE_MSEC 10
@@ -123,7 +124,8 @@ static int bd65b60_init(struct bd65b60_led *led)
 	return ret;
 }
 
-static int bd65b60_dt_parse(struct bd65b60_led *led)
+static int bd65b60_parse_dt(struct bd65b60_led *led,
+			    struct fwnode_handle **fwnode)
 {
 	struct device *dev = &led->client->dev;
 	struct fwnode_handle *child = NULL;
@@ -148,11 +150,13 @@ static int bd65b60_dt_parse(struct bd65b60_led *led)
 		return ret;
 	}
 
+	dev_info(dev, "select: %d", led->select);
+
 	/* Check optional properties */
 	led->state = BD65B60_OFF;
 	if (!fwnode_property_present(child, "default-state")) {
-		ret = fwnode_property_read_string(child, "default-state",
-						  (const char **)&default_state);
+		ret = fwnode_property_read_string(
+			child, "default-state", (const char **)&default_state);
 		if (ret) {
 			dev_err(dev, "Failed to read default-state property");
 			return ret;
@@ -180,12 +184,16 @@ static int bd65b60_dt_parse(struct bd65b60_led *led)
 		}
 	}
 
+	*fwnode = child;
+
 	return 0;
 }
 
 static int bd65b60_probe(struct i2c_client *client)
 {
 	struct bd65b60_led *led;
+	struct led_init_data init_data = {};
+	struct fwnode_handle *fwnode = NULL;
 	int ret;
 
 	led = devm_kzalloc(&client->dev, sizeof(*led), GFP_KERNEL);
@@ -195,10 +203,11 @@ static int bd65b60_probe(struct i2c_client *client)
 	led->client = client;
 	i2c_set_clientdata(client, led);
 
-	ret = bd65b60_dt_parse(led);
+	ret = bd65b60_parse_dt(led, &fwnode);
 	if (ret)
 		return ret;
 
+	led->cdev.name = BD65B60_DEFAULT_NAME;
 	led->cdev.brightness_set = bd65b60_brightness_set;
 	led->cdev.brightness = BD65B60_DEFAULT_BRIGHTNESS;
 	led->cdev.max_brightness = BD65B60_MAX_BRIGHTNESS;
@@ -216,14 +225,22 @@ static int bd65b60_probe(struct i2c_client *client)
 	mutex_init(&led->lock);
 
 	ret = bd65b60_init(led);
-	if (ret)
+	if (ret) {
+		dev_err(&client->dev, "Failed to initialize led: %d", ret);
 		return ret;
+	}
 
-	ret = devm_led_classdev_register(&client->dev, &led->cdev);
+	init_data.fwnode = fwnode;
+	init_data.devicename = led->client->name;
+	init_data.default_label = ":";
+	ret = devm_led_classdev_register_ext(&client->dev, &led->cdev,
+					     &init_data);
 	if (ret) {
 		dev_err(&client->dev, "Failed to register led: %d", ret);
 		return ret;
 	}
+
+	dev_info(&client->dev, "BD65B60 LED driver initialized");
 
 	return 0;
 }
