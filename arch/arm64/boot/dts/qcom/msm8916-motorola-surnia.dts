@@ -59,9 +59,9 @@
 		pinctrl-names = "default", "sleep";
 	};
 
-	backlight: backlight {
+	backlight_dsi: backlight-dsi {
 		compatible = "led-backlight";
-		leds = <&wled>;
+		leds = <&backlight_led>;
 		default-brightness-level = <192>;
 	   };
 };
@@ -69,18 +69,18 @@
 &blsp_i2c1 {
 	status = "okay";
 
-   wled: led-controller@64 {
+   led_controler@64 {
       compatible = "rohm,bd65b60";
       reg = <0x64>;
       pinctrl-names = "default";
       pinctrl-0 = <&backlight_reset_default>;
 
-      led {
+      backlight_led: led {
          function = LED_FUNCTION_BACKLIGHT;
          color = <LED_COLOR_ID_WHITE>;
          select = <1>;
          default-state = "keep";
-         default-trigger = "bkl-trigger";
+         linux,default-trigger = "backlight";
       };
    };
 
@@ -151,7 +151,7 @@
 	panel@0 {
 		compatible = "motorola,surnia-panel";
 		reg = <0>;
-		backlight = <&backlight>;
+		backlight = <&backlight_dsi>;
 		power-supply = <&pm8916_l17>;
 		reset-gpios = <&msmgpio 78 GPIO_ACTIVE_LOW>;
 
