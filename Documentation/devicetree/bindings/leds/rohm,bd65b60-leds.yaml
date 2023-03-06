@@ -21,7 +21,7 @@ select: false
 
 properties:
   compatible:
-    const: rohm,bd65b60-leds
+    const: rohm,bd65b60
 
 patternProperties:
   "^led-[1-2]$":
@@ -29,27 +29,42 @@ patternProperties:
     unevaluatedProperties: false
 
     properties:
-      rohm,led-compatible:
-        description: LED identification string
-        $ref: "/schemas/types.yaml#/definitions/string"
-        enum:
-          - bd65b60-ambled
-          - bd65b60-grnled
+      rohm,enable:
+        description:
+            Select which leds are being controled.
+            Values defined in <dt-bindings/leds/leds-bd65b60.h>
+        $ref: "/schemas/types.yaml#/definitions/uint32"
+        enum: [ 0, 1, 4, 5 ]
+
+      rohm,ovp:
+        description:
+            Select Over-Voltage-Portection level.
+            Values defined in <dt-bindings/leds/leds-bd65b60.h>
+        $ref: "/schemas/types.yaml#/definitions/uint32"
+        enum: [ 0, 8, 16 ]
+        default: 16
 
 required:
   - compatible
+  - rohm,enable
 additionalProperties: false
 
 examples:
   - |
-  led-controller {
-    compatible = "rohm,bd65b60";
-    reg = <0x64>;
-    linux,default-trigger = "bkl-trigger";
-    rohm,no-reset;
-    rohm,led1-used;
-    pinctrl-names = "default";
-    pinctrl-0 = <&backlight_reset_default>;
-  };
+    i2c {
+
+        led_controler@64 {
+            compatible = "rohm,bd65b60";
+            reg = <0x64>;
+
+            backlight_led: led {
+                function = LED_FUNCTION_BACKLIGHT;
+                color = <LED_COLOR_ID_WHITE>;
+                rohm,enable = <BD65B60_ENABLE_LED1>;
+                default-state = "keep";
+                linux,default-trigger = "backlight";
+            };
+        };
+    };
 
 ...

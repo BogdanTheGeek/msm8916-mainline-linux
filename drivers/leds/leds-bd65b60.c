@@ -1,6 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Simple driver for ROHM Semiconductor BD65B60GWL Backlight driver chip
+ *
  * Copyright (C) 2014 ROHM Semiconductor.com
  * Copyright (C) 2014 MMI
  * Copyright (C) 2023 Bogdan Ionescu <bogdan.ionescu.work@gmail.com>
@@ -65,7 +66,7 @@ struct bd65b60_led {
 	struct i2c_client *client;
 	struct regmap *regmap;
 	struct mutex lock;
-	enum bd65b60_ledsel select;
+	enum bd65b60_ledsel enable;
 	enum bd65b60_state state;
 	enum bd65b60_ovp ovp;
 };
@@ -113,7 +114,7 @@ static int bd65b60_init(struct bd65b60_led *led)
 
 	ret |= regmap_update_bits(led->regmap, REG_COMSET1, OVP_MASK, led->ovp);
 	ret |= regmap_update_bits(led->regmap, REG_LEDSEL, LEDSEL_MASK,
-				  led->select);
+				  led->enable);
 	ret |= regmap_update_bits(led->regmap, REG_CTRLSET, PWMEN_MASK,
 				  BD65B60_PWM_ENABLE);
 	ret |= regmap_write(led->regmap, REG_PON,
@@ -139,18 +140,16 @@ static int bd65b60_parse_dt(struct bd65b60_led *led,
 	}
 
 	/* Check required properties */
-	if (!fwnode_property_present(child, "select")) {
+	if (!fwnode_property_present(child, "rohm,enable")) {
 		dev_err(dev, "No reg property found");
 		return -ENOENT;
 	}
 
-	ret = fwnode_property_read_u32(child, "select", &led->select);
-	if (ret || (led->select & LEDSEL_MASK) != led->select) {
-		dev_err(dev, "Failed to read select property");
+	ret = fwnode_property_read_u32(child, "rohm,enable", &led->enable);
+	if (ret || (led->enable & LEDSEL_MASK) != led->enable) {
+		dev_err(dev, "Failed to read enable property");
 		return ret;
 	}
-
-	dev_info(dev, "select: %d", led->select);
 
 	/* Check optional properties */
 	led->state = BD65B60_OFF;
@@ -175,8 +174,8 @@ static int bd65b60_parse_dt(struct bd65b60_led *led,
 	}
 
 	led->ovp = BD65B60_DEFAULT_OVP_VAL;
-	if (fwnode_property_present(child, "ovp")) {
-		ret = fwnode_property_read_u32(child, "ovp", &led->ovp);
+	if (fwnode_property_present(child, "rohm,ovp")) {
+		ret = fwnode_property_read_u32(child, "rohm,ovp", &led->ovp);
 
 		if (ret || (led->ovp & OVP_MASK) != led->ovp) {
 			dev_err(dev, "Failed to read ovp property");
