@@ -6,313 +6,260 @@
  * Copyright (C) 2023 Bogdan Ionescu <bogdan.ionescu.work@gmail.com>
 */
 
-#include <linux/module.h>
-#include <linux/slab.h>
 #include <linux/i2c.h>
 #include <linux/leds.h>
-#include <linux/err.h>
-#include <linux/delay.h>
-#include <linux/uaccess.h>
-#include <linux/interrupt.h>
+#include <linux/module.h>
 #include <linux/regmap.h>
-#include <linux/platform_data/leds-bd65b60.h>
-#include <linux/of.h>
+#include <linux/slab.h>
 
-#define BD65B60_NAME "bd65b60"
 #define BD65B60_MAX_BRIGHTNESS 255
 #define BD65B60_DEFAULT_BRIGHTNESS 255
 #define BD65B60_DEFAULT_TRIGGER "bkl-trigger"
 #define BD65B60_DEFAULT_OVP_VAL BD65B60_35V_OVP
 
-#define REG_SFTRST 0x00
-#define REG_COMSET1 0x01
-#define REG_COMSET2 0x02
-#define REG_LEDSEL 0x03
-#define REG_ILED 0x05
-#define REG_CTRLSET 0x07
-#define REG_SLEWSET 0x08
-#define REG_PON 0x0E
-#define REG_MAX REG_PON
+#define INT_DEBOUNCE_MSEC 10
 
 #define PWMEN_MASK 0x20
 #define OVP_MASK 0x18
 #define LEDSEL_MASK 0x05
 
-#define INT_DEBOUNCE_MSEC 10
-
-struct bd65b60_chip {
-	struct bd65b60_platform_data *pdata;
-	struct regmap *regmap;
-	struct device *dev;
-	struct workqueue_struct *ledwq;
-	struct work_struct ledwork;
-	struct led_classdev cdev;
+enum bd65b60_regs {
+	REG_SFTRST = 0x00,
+	REG_COMSET1 = 0x01,
+	REG_COMSET2 = 0x02,
+	REG_LEDSEL = 0x03,
+	REG_ILED = 0x05,
+	REG_CTRLSET = 0x07,
+	REG_SLEWSET = 0x08,
+	REG_PON = 0x0E,
+	REG_MAX = REG_PON,
 };
 
-static const struct regmap_config bd65b60_regmap = {
+enum bd65b60_ovp {
+	BD65B60_25V_OVP = 0x00,
+	BD65B60_30V_OVP = 0x08,
+	BD65B60_35V_OVP = 0x10,
+};
+
+enum bd65b60_ledsel {
+	BD65B60_DISABLE = 0x00,
+	BD65B60_LED1SEL = 0x01,
+	BD65B60_LED2SEL = 0x04,
+	BD65B60_LED12SEL = 0x05,
+};
+
+enum bd65b60_pwm_ctrl {
+	BD65B60_PWM_DISABLE = 0x00,
+	BD65B60_PWM_ENABLE = 0x20,
+};
+
+enum bd65b60_state {
+	BD65B60_OFF = 0,
+	BD65B60_ON = 1,
+	BD65B60_KEEP = 2,
+};
+
+struct bd65b60_led {
+	struct led_classdev cdev;
+	struct i2c_client *client;
+	struct regmap *regmap;
+	struct mutex lock;
+	enum bd65b60_ledsel select;
+	enum bd65b60_state state;
+	enum bd65b60_ovp ovp;
+};
+
+static const struct regmap_config bd65b60_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
 	.max_register = REG_MAX,
 };
 
-/* i2c access */
-static int bd65b60_read(struct bd65b60_chip *pchip, unsigned int reg)
+static void bd65b60_brightness_set(struct led_classdev *cdev,
+				   enum led_brightness brightness)
 {
-	int rval;
-	unsigned int reg_val;
+	int ret;
+	enum bd65b60_state new_state;
+	struct bd65b60_led *led = container_of(cdev, struct bd65b60_led, cdev);
 
-	rval = regmap_read(pchip->regmap, reg, &reg_val);
-	if (rval < 0)
-		return rval;
-	return reg_val & 0xFF;
-}
+	mutex_lock(&led->lock);
 
-static int bd65b60_write(struct bd65b60_chip *pchip, unsigned int reg,
-			 unsigned int data)
-{
-	int rc;
-	rc = regmap_write(pchip->regmap, reg, data);
-	if (rc < 0)
-		dev_err(pchip->dev, "i2c failed to write reg %#x", reg);
-	return rc;
-}
+	ret = regmap_write(led->regmap, REG_ILED, brightness);
 
-static int bd65b60_update(struct bd65b60_chip *pchip, unsigned int reg,
-			  unsigned int mask, unsigned int data)
-{
-	int rc;
+	new_state = (brightness) ? BD65B60_ON : BD65B60_OFF;
 
-	rc = regmap_update_bits(pchip->regmap, reg, mask, data);
-	if (rc < 0)
-		dev_err(pchip->dev, "i2c failed to update reg %#x", reg);
-	return rc;
-}
-
-/* initialize chip */
-static int bd65b60_chip_init(struct i2c_client *client)
-{
-	int rval = 0;
-	struct bd65b60_chip *pchip = i2c_get_clientdata(client);
-	struct bd65b60_platform_data *pdata = pchip->pdata;
-
-	if (!pdata->no_reset)
-		rval |= bd65b60_write(pchip, REG_SFTRST, 0x01);
-	/* set common settings/OVP register */
-	rval |= bd65b60_update(pchip, REG_COMSET1, OVP_MASK, pdata->ovp_val);
-	/* set control */
-	rval |= bd65b60_update(pchip, REG_LEDSEL, LEDSEL_MASK, pdata->led_sel);
-	/* turn on LED Driver */
-	rval |= bd65b60_write(pchip, REG_PON, 0x01);
-	if (rval < 0)
-		dev_err(&client->dev, "i2c failed to access register");
-	return rval;
-}
-
-/* set brightness */
-static void bd65b60_brightness_set(struct work_struct *work)
-{
-	struct bd65b60_chip *pchip =
-		container_of(work, struct bd65b60_chip, ledwork);
-	unsigned int level = pchip->cdev.brightness;
-	static int old_level = -1;
-
-	/* set configure pwm input on first brightness command */
-	if (old_level == -1) {
-		dev_info(pchip->dev, "Enabling CABC");
-		bd65b60_update(pchip, REG_CTRLSET, PWMEN_MASK,
-			       BD65B60_PWM_ENABLE);
+	if (new_state != led->state) {
+		ret |= regmap_write(led->regmap, REG_PON, new_state);
+		led->state = new_state;
 	}
 
-	if (level != old_level && old_level == 0) {
-		dev_info(pchip->dev, "backlight on");
-		bd65b60_write(pchip, REG_PON, 0x01);
-	} else if (level == 0 && old_level != 0) {
-		dev_info(pchip->dev, "backlight off");
-	}
-	old_level = level;
+	mutex_unlock(&led->lock);
 
-	bd65b60_write(pchip, REG_ILED, level);
-	if (!level)
-		/* turn off LED because 0 in REG_ILED = 1/256 * Imax */
-		bd65b60_write(pchip, REG_PON, 0x00);
+	if (ret)
+		dev_err(&led->client->dev, "Failed to set brightness: %d", ret);
 }
 
-static enum led_brightness bd65b60_led_get(struct led_classdev *led_cdev)
+static int bd65b60_init(struct bd65b60_led *led)
 {
-	struct bd65b60_chip *pchip;
-	int rc;
+	int ret;
 
-	pchip = container_of(led_cdev, struct bd65b60_chip, cdev);
-	rc = bd65b60_read(pchip, REG_ILED);
-	return led_cdev->brightness;
-}
+	mutex_lock(&led->lock);
 
-static void bd65b60_led_set(struct led_classdev *led_cdev,
-			    enum led_brightness value)
-{
-	struct bd65b60_chip *pchip;
-
-	pchip = container_of(led_cdev, struct bd65b60_chip, cdev);
-	if (value < LED_OFF) {
-		dev_err(pchip->dev, "Invalid brightness value");
-		return;
+	if (BD65B60_KEEP != led->state) {
+		/* Reset the chip */
+		ret = regmap_write(led->regmap, REG_SFTRST, 0x01);
 	}
 
-	if (value > led_cdev->max_brightness)
-		value = led_cdev->max_brightness;
+	ret |= regmap_update_bits(led->regmap, REG_COMSET1, OVP_MASK, led->ovp);
+	ret |= regmap_update_bits(led->regmap, REG_LEDSEL, LEDSEL_MASK,
+				  led->select);
+	ret |= regmap_update_bits(led->regmap, REG_CTRLSET, PWMEN_MASK,
+				  BD65B60_PWM_ENABLE);
+	ret |= regmap_write(led->regmap, REG_PON,
+			    led->state ? BD65B60_ON : BD65B60_OFF);
 
-	led_cdev->brightness = value;
-	schedule_work(&pchip->ledwork);
+	mutex_unlock(&led->lock);
+
+	return ret;
 }
 
-#ifdef CONFIG_OF
-static int bd65b60_dt_init(struct i2c_client *client,
-			   struct bd65b60_platform_data *pdata)
+static int bd65b60_dt_parse(struct bd65b60_led *led)
 {
-	struct device_node *np = client->dev.of_node;
-	int rc;
+	struct device *dev = &led->client->dev;
+	struct fwnode_handle *child = NULL;
+	char default_state[] = "keep";
+	int ret;
 
-	rc = of_property_read_string(np, "linux,name", &pdata->name);
-	if (rc) {
-		dev_err(&client->dev, "No linux name provided");
-		return rc;
+	child = device_get_next_child_node(dev, child);
+	if (!child) {
+		dev_err(dev, "No led child node found");
+		return -ENODEV;
 	}
 
-	pdata->trigger = BD65B60_DEFAULT_TRIGGER;
-	of_property_read_string(np, "linux,default-trigger", &pdata->trigger);
+	/* Check required properties */
+	if (!fwnode_property_present(child, "select")) {
+		dev_err(dev, "No reg property found");
+		return -ENOENT;
+	}
 
-	if (of_property_read_bool(np, "rohm,led1-used"))
-		pdata->led_sel |= BD65B60_LED1SEL;
-	if (of_property_read_bool(np, "rohm,led2-used"))
-		pdata->led_sel |= BD65B60_LED2SEL;
+	ret = fwnode_property_read_u32(child, "select", &led->select);
+	if (ret || (led->select & LEDSEL_MASK) != led->select) {
+		dev_err(dev, "Failed to read select property");
+		return ret;
+	}
 
-	pdata->no_reset = of_property_read_bool(np, "rohm,no-reset");
+	/* Check optional properties */
+	led->state = BD65B60_OFF;
+	if (!fwnode_property_present(child, "default-state")) {
+		ret = fwnode_property_read_string(child, "default-state",
+						  (const char **)&default_state);
+		if (ret) {
+			dev_err(dev, "Failed to read default-state property");
+			return ret;
+		}
 
-	pdata->default_on = of_property_read_bool(np, "rohm,default-on");
-	pdata->init_level = BD65B60_DEFAULT_BRIGHTNESS;
-	if (pdata->default_on)
-		of_property_read_u32(np, "rohm,init-level", &pdata->init_level);
+		if (strcmp(default_state, "keep") == 0)
+			led->state = BD65B60_KEEP;
+		else if (strcmp(default_state, "on") == 0)
+			led->state = BD65B60_ON;
+		else if (strcmp(default_state, "off") == 0)
+			led->state = BD65B60_OFF;
+		else {
+			dev_err(dev, "Invalid default-state property");
+			return -EINVAL;
+		}
+	}
 
-	pdata->ovp_val = BD65B60_DEFAULT_OVP_VAL;
-	of_property_read_u32(np, "rohm,ovp-val", &pdata->ovp_val);
+	led->ovp = BD65B60_DEFAULT_OVP_VAL;
+	if (fwnode_property_present(child, "ovp")) {
+		ret = fwnode_property_read_u32(child, "ovp", &led->ovp);
+
+		if (ret || (led->ovp & OVP_MASK) != led->ovp) {
+			dev_err(dev, "Failed to read ovp property");
+			return ret;
+		}
+	}
 
 	return 0;
 }
 
-static const struct of_device_id of_bd65b60_leds_match[] = {
-	{
-		.compatible = "rohm,bd65b60",
-	},
-	{ /* sentinel */ },
-};
-
-#else
-static int bd65b60_dt_init(struct i2c_client *client,
-			   struct bd65b60_platform_data *pdata)
+static int bd65b60_probe(struct i2c_client *client)
 {
-	return ERR_PTR(-ENODEV);
-}
+	struct bd65b60_led *led;
+	int ret;
 
-static const struct of_device_id of_bd65b60_leds_match;
-
-#endif
-
-static int bd65b60_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
-{
-	struct device_node *np = client->dev.of_node;
-	struct bd65b60_platform_data *pdata = dev_get_platdata(&client->dev);
-	struct bd65b60_chip *pchip;
-	struct led_init_data init_data = {};
-	int rc;
-
-	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
-		dev_err(&client->dev, "fail : i2c functionality check");
-		return -EOPNOTSUPP;
-	}
-
-	pchip = devm_kzalloc(&client->dev, sizeof(struct bd65b60_chip),
-			     GFP_KERNEL);
-	if (!pchip)
+	led = devm_kzalloc(&client->dev, sizeof(*led), GFP_KERNEL);
+	if (!led)
 		return -ENOMEM;
 
-	if (!pdata) {
-		pdata = devm_kzalloc(&client->dev,
-				     sizeof(struct bd65b60_platform_data),
-				     GFP_KERNEL);
-		if (!pdata)
-			return -ENOMEM;
+	led->client = client;
+	i2c_set_clientdata(client, led);
 
-		rc = bd65b60_dt_init(client, pdata);
-		if (rc)
-			return rc;
+	ret = bd65b60_dt_parse(led);
+	if (ret)
+		return ret;
+
+	led->cdev.brightness_set = bd65b60_brightness_set;
+	led->cdev.brightness = BD65B60_DEFAULT_BRIGHTNESS;
+	led->cdev.max_brightness = BD65B60_MAX_BRIGHTNESS;
+	led->cdev.default_trigger = BD65B60_DEFAULT_TRIGGER;
+	led->client = client;
+
+	led->regmap = devm_regmap_init_i2c(client, &bd65b60_regmap_config);
+	if (IS_ERR(led->regmap)) {
+		ret = PTR_ERR(led->regmap);
+		dev_err(&client->dev, "Failed to allocate register map: %d",
+			ret);
+		return ret;
 	}
 
-	i2c_set_clientdata(client, pchip);
-	pchip->pdata = pdata;
-	pchip->dev = &client->dev;
+	mutex_init(&led->lock);
 
-	pchip->regmap = devm_regmap_init_i2c(client, &bd65b60_regmap);
-	if (IS_ERR(pchip->regmap)) {
-		rc = PTR_ERR(pchip->regmap);
-		dev_err(&client->dev, "fail : allocate reg. map: %d", rc);
-		return rc;
+	ret = bd65b60_init(led);
+	if (ret)
+		return ret;
+
+	ret = devm_led_classdev_register(&client->dev, &led->cdev);
+	if (ret) {
+		dev_err(&client->dev, "Failed to register led: %d", ret);
+		return ret;
 	}
-
-	/* chip initialize */
-	rc = bd65b60_chip_init(client);
-	if (rc < 0) {
-		dev_err(&client->dev, "fail : init chip");
-		return rc;
-	}
-
-	/* led classdev register */
-	pchip->cdev.brightness_set = bd65b60_led_set;
-	pchip->cdev.brightness_get = bd65b60_led_get;
-	pchip->cdev.max_brightness = BD65B60_MAX_BRIGHTNESS;
-	pchip->cdev.name = pdata->name;
-	pchip->cdev.default_trigger = pdata->trigger;
-	INIT_WORK(&pchip->ledwork, bd65b60_brightness_set);
-
-	init_data.fwnode = &np->fwnode;
-	rc = devm_led_classdev_register_ext(&client->dev, &pchip->cdev,
-					    &init_data);
-	if (rc) {
-		dev_err(&client->dev, "unable to register led rc=%d", rc);
-		return rc;
-	}
-
-	if (pdata->default_on)
-		bd65b60_led_set(&pchip->cdev, pdata->init_level);
 
 	return 0;
 }
 
 static void bd65b60_remove(struct i2c_client *client)
 {
-	struct bd65b60_chip *pchip = i2c_get_clientdata(client);
+	struct bd65b60_led *led = i2c_get_clientdata(client);
 
-	bd65b60_write(pchip, REG_PON, 0);
-	led_classdev_unregister(&pchip->cdev);
+	if (regmap_write(led->regmap, REG_PON, BD65B60_OFF))
+		dev_err(&client->dev, "Failed to turn off led");
 }
 
-static const struct i2c_device_id bd65b60_id[] = { { BD65B60_NAME, 0 }, {} };
-
+static const struct i2c_device_id bd65b60_id[] = {
+	{ "bd65b60", 0 },
+	{},
+};
 MODULE_DEVICE_TABLE(i2c, bd65b60_id);
+
+static const struct of_device_id of_bd65b60_leds_match[] = {
+	{ .compatible = "rohm,bd65b60" },
+	{},
+};
 MODULE_DEVICE_TABLE(of, of_bd65b60_leds_match);
 
 static struct i2c_driver bd65b60_i2c_driver = {
 	.driver = {
-		.name = BD65B60_NAME,
+		.name = "bd65b60",
 		.owner = THIS_MODULE,
 		.of_match_table = of_match_ptr(of_bd65b60_leds_match),
 		  },
-	.probe = bd65b60_probe,
+	.probe_new = bd65b60_probe,
 	.remove = bd65b60_remove,
 	.id_table = bd65b60_id,
 };
 
 module_i2c_driver(bd65b60_i2c_driver);
 
-MODULE_DESCRIPTION("ROHM Semiconductor Backlight driver for bd65b60");
-MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("ROHM Semiconductor led driver for bd65b60");
+MODULE_LICENSE("GPL v2");

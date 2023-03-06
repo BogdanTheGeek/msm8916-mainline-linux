@@ -8,6 +8,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/leds/common.h>
 
 / {
 	model = "Motorola Moto E 2015 LTE (surnia)";
@@ -58,7 +59,7 @@
 		pinctrl-names = "default", "sleep";
 	};
 
-	backlight: panel-backlight {
+	backlight: backlight {
 		compatible = "led-backlight";
 		leds = <&wled>;
 		default-brightness-level = <192>;
@@ -68,16 +69,20 @@
 &blsp_i2c1 {
 	status = "okay";
 
-	wled: bd65b60@64 {
-		compatible = "rohm,bd65b60";
-		reg = <0x64>;
-		linux,name = "wled:backlight";
-		linux,default-trigger = "bkl-trigger";
-		rohm,no-reset;
-		rohm,led1-used;
-		pinctrl-names = "default";
-		pinctrl-0 = <&backlight_reset_default>;
-	};
+   wled: led-controller@64 {
+      compatible = "rohm,bd65b60";
+      reg = <0x64>;
+      pinctrl-names = "default";
+      pinctrl-0 = <&backlight_reset_default>;
+
+      led {
+         function = LED_FUNCTION_BACKLIGHT;
+         color = <LED_COLOR_ID_WHITE>;
+         select = <1>;
+         default-state = "keep";
+         default-trigger = "bkl-trigger";
+      };
+   };
 
 };
 
