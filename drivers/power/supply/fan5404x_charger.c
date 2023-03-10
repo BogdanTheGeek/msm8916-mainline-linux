@@ -159,6 +159,65 @@ enum fan5404x_restart_value {
 	RESTART = 0xb5,
 }
 
+static int max17040_prop_writeable(struct power_supply *psy,
+            enum power_supply_property psp)
+{
+   switch (psp) {
+      default:
+         return 0;
+   }
+}
+
+static int max17040_get_property(struct power_supply *psy,
+				 enum power_supply_property psp,
+				 union power_supply_propval *val)
+{
+   switch (psp) {
+      default:
+         return -EINVAL;
+   }
+}
+
+static int max17040_set_property(struct power_supply *psy,
+				 enum power_supply_property psp,
+				 const union power_supply_propval *val)
+{
+   switch (psp) {
+      default:
+         return -EINVAL;
+   }
+}
+
+static enum power_supply_property fan5404x_psy_props[] = {
+	POWER_SUPPLY_PROP_STATUS,
+   POWER_SUPPLY_PROP_AUTHENTIC,
+   POWER_SUPPLY_PROP_CHARGE_TYPE,
+	POWER_SUPPLY_PROP_HEALTH,
+   POWER_SUPPLY_PROP_VOLTAGE_MAX,
+   POWER_SUPPLY_PROP_VOLTAGE_MIN,
+   POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
+   POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
+   POWER_SUPPLY_PROP_CURRENT_MAX,
+   POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT,
+   POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
+   POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE,
+   POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX,
+   POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT,
+   POWER_SUPPLY_PROP_INPUT_VOLTAGE_LIMIT,
+   POWER_SUPPLY_PROP_CHARING_TERM_CURRENT,
+   POWER_SUPPLY_PROP_SERIAL_NUMBER,
+};
+
+static const struct power_supply_desc fan5404x_psy_desc = {
+	.name = "fan5404x",
+	.type = POWER_SUPPLY_TYPE_USB,
+	.properties = fan5404x_psy_props,
+	.num_properties = ARRAY_SIZE(fan5404x_psy_props),
+	.get_property = fan5404x_get_property,
+	.set_property = fan5404x_set_property,
+	property_is_writeable = fan5404x_property_is_writeable,
+};
+
 static uint8_t fan5404x_get_iocharge(const uint32_t current_ma)
 {
 	if (current_ma < 550)
@@ -221,8 +280,14 @@ static uint8_t fan5404x_get_oreg(const uint32_t voltage_mv)
 		return ((voltage_mv - 3500) / 20);
 }
 
+static void fan5404x_task(struct work_struct *work)
+{
+	/* Every 32s we need to to reset the T32 timer to continue charging. */
+}
+
 static int fan5404x_probe(struct i2c_client *client)
 {
+	int ret;
 }
 
 static const struct i2c_device_id fan5404x_id[] = {
