@@ -93,7 +93,7 @@
 &blsp_i2c1 {
 	status = "okay";
 
-	battery@36 {
+	battery: battery@36 {
 		compatible = "maxim,max17050";
 		reg = <0x36>;
 
@@ -109,6 +109,14 @@
 		pinctrl-0 = <&battery_alert_default>;
 		pinctrl-names = "default";
 	};
+
+/*
+   charger@6b {
+      compatible = "onsemi,fan54046";
+      reg = <0x6b>;
+      supplies = <&battery>;
+   };
+   */
 
 	regulator@3e {
 		compatible = "ti,tps65132";

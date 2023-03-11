@@ -176,6 +176,13 @@ config BATTERY_LEGO_EV3
 	help
 	  Say Y here to enable support for the LEGO MINDSTORMS EV3 battery.
 
+config CHARGER_FAN5404X
+   tristate "ON Semiconductor FAN5404X charger driver"
+   depends on I2C
+   select REGMAP_I2C
+   help
+     Say Y here to enable support for the ON Semiconductor FAN5404X charger.
+
 config BATTERY_PMU
 	tristate "Apple PMU battery"
 	depends on PPC32 && ADB_PMU
