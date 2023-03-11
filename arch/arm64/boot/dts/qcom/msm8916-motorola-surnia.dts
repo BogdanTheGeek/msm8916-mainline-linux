@@ -125,6 +125,8 @@
 		compatible = "maxim,max17050";
 		reg = <0x36>;
 
+		power-supplies = <&usb_charger>;
+
 		maxim,rsns-microohm = <10000>;
 		maxim,over-heat-temp = <600>;
 		maxim,cold-temp = <(-200)>;
@@ -138,13 +140,10 @@
 		pinctrl-names = "default";
 	};
 
-/*
-   charger@6b {
-      compatible = "onsemi,fan54046";
-      reg = <0x6b>;
-      supplies = <&battery>;
-   };
-   */
+	usb_charger: charger@6b {
+		compatible = "onsemi,fan54046";
+		reg = <0x6b>;
+	};
 
 };
 

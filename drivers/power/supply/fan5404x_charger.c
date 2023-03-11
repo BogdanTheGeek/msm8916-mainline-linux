@@ -166,13 +166,13 @@ struct fan5404x {
 };
 
 static enum power_supply_property fan5404x_psy_props[] = {
-	POWER_SUPPLY_PROP_STATUS, POWER_SUPPLY_PROP_CHARGE_TYPE,
-	POWER_SUPPLY_PROP_HEALTH, POWER_SUPPLY_PROP_PRESENT,
+	POWER_SUPPLY_PROP_STATUS,
+   POWER_SUPPLY_PROP_CHARGE_TYPE,
+	POWER_SUPPLY_PROP_HEALTH,
+   POWER_SUPPLY_PROP_PRESENT,
 	POWER_SUPPLY_PROP_ONLINE,
 	/*
 	POWER_SUPPLY_PROP_AUTHENTIC,
-	POWER_SUPPLY_PROP_CHARGE_TYPE,
-	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 	POWER_SUPPLY_PROP_VOLTAGE_MIN,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
@@ -379,10 +379,6 @@ static int fan5404x_probe(struct i2c_client *client)
 
 	psy_cfg.drv_data = charger;
 	psy_cfg.of_node = dev->of_node;
-   /*
-	psy_cfg.supplied_to = supplied_to;
-	psy_cfg.num_supplicants = num_supplicants;
-   */
 
 	psy = devm_power_supply_register_no_ws(dev, &fan5404x_psy_desc,
 					       &psy_cfg);
